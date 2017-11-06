@@ -34,6 +34,25 @@ get_box = lambda p,x,y: (p[3*(x/3):3*(x/3)+3,3*(y/3):3*(y/3)+3]).flatten()
 
 get_rect = [get_row, get_col, get_box]
 
+def enumerate_rows(p):
+    result = []
+    for i in range(0, 9):
+        result.append(p[i].flatten())
+    return result
+
+def enumerate_columns(p):
+    result = []
+    for i in range(0, 9):
+        result.append(p[:,i].flatten())
+    return result
+
+def enumerate_boxes(p):
+    result = []
+    for x in range(0, 9, 3):
+        for y in range(0, 9, 3):
+            result.append(get_box(p,x,y))
+    return result
+
 def get_possibilities(p):
     """For each entry in the grid, list out all of the things it could be"""
     full = set(range(1,10))
@@ -90,7 +109,10 @@ def solve_step(p):
 
 
 
-def solve(px, solution_list=None):
+def solve(px, solution_list=None, step=0):
+
+    if step > 100:
+        raise ValueError('oops')
 
             
     p = px.copy()
@@ -116,25 +138,41 @@ def solve(px, solution_list=None):
     # find the first cell with multiple possibilities
     # make a guess!
     possibiliteis = get_possibilities(p)
-    min_r = np.random.choice(9)
-    min_c = np.random.choice(9)
 
-    poss_list = np.array(list(possibiliteis[min_r, min_c]))
+    r_range = np.arange(9)
+    c_range = np.arange(9)
+
+    np.random.shuffle(r_range)
+    np.random.shuffle(c_range)
+
+    is_done = True
+    for row in r_range:
+        for col in c_range:
+            poss_list = np.array(list(possibiliteis[row, col]))
+            if len(poss_list) > 1:
+                is_done = True
+                break
+        if is_done:
+            break
+
     np.random.shuffle(poss_list)
-    
+
+    if len(poss_list) <= 1:
+        return None, None
+
     for poss in poss_list:
-        p[min_r,min_c] = poss
+        p[row, col] = poss
 
         if solution_list is not None:
-            rs, slns = solve(p.copy(), solution_list + [p.copy()])
+            rs, slns = solve(p.copy(), solution_list + [p.copy()], step+1)
         else:
-            rs, slns = solve(p.copy(), solution_list)
+            rs, slns = solve(p.copy(), solution_list, step+1)
 
         if rs is not None:
             if is_complete(rs):
                 if is_correct(rs):
                     return rs, slns
-        p[min_r,min_c] = 0
+        p[row, col] = 0
                                
     return None, None
 
