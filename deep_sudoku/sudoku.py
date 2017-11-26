@@ -107,11 +107,20 @@ def solve_step(p):
     else:
         return None
 
+class Count(object):
+    def __init__(self):
+        self.c=0
+    def increment(self):
+        self.c += 1
+    def get(self):
+        return self.c
 
-
-def solve(px, solution_list=None, step=0):
-
-    if step > 100:
+def solve(px, solution_list=None, step=0, count=None):
+    if count is None:
+        count = Count()
+    count.increment()
+    
+    if step > 100 or count.get() > 1000:
         raise ValueError('oops')
 
             
@@ -164,9 +173,9 @@ def solve(px, solution_list=None, step=0):
         p[row, col] = poss
 
         if solution_list is not None:
-            rs, slns = solve(p.copy(), solution_list + [p.copy()], step+1)
+            rs, slns = solve(p.copy(), solution_list + [p.copy()], step+1, count)
         else:
-            rs, slns = solve(p.copy(), solution_list, step+1)
+            rs, slns = solve(p.copy(), solution_list, step+1, count)
 
         if rs is not None:
             if is_complete(rs):
