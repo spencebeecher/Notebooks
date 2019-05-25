@@ -4,6 +4,7 @@ import torch.cuda
 import torch.nn
 from torch.autograd import Variable
 import time
+import torch.nn.functional as F
 
 # helper functions converting between a sudoku board and a 1 hot encoded version
 # 9x9 matrix where each cell can take 1-9 values becomes a 1 dimensional array of size 9x9x9
@@ -114,7 +115,7 @@ def predict_puzzle(puzzle, model):
 
 def accuracy(answer, puzzle, prediction):
     num_zeros = np.sum(puzzle == 0)
-    return ((prediction == answer).sum() - (81 - num_zeros)) / num_zeros
+    return ((prediction == answer).sum() - (81 - num_zeros)), num_zeros
 
 
 def try_complete_sudoku(in_file_name, out_file_name, model, limit=10):
@@ -152,10 +153,13 @@ def try_complete_sudoku(in_file_name, out_file_name, model, limit=10):
 def eval_and_score_puzzle(model, file_name='test_sudoku.csv'):
     kaggle_puz = []
     kaggle_sln = []
-    for i, line in enumerate(open(file_name, 'r').read().splitlines()[1:]):
-        quiz, solution = line.split(",")
-        kaggle_puz.append([int(c) for c in quiz])
-        kaggle_sln.append([int(c) for c in solution])
+    for i, line in enumerate(open(file_name, 'r').read().splitlines()):
+        try:
+            quiz, solution = line.split(",")
+            kaggle_puz.append([int(c) for c in quiz])
+            kaggle_sln.append([int(c) for c in solution])
+        except:
+            pass
 
 
     kaggle_puz = np.array(kaggle_puz).reshape((-1, 9, 9))
@@ -166,10 +170,11 @@ def eval_and_score_puzzle(model, file_name='test_sudoku.csv'):
         p = predict_puzzle(puz, model)
         score = accuracy(sln, puz, p)
         scores.append(score)
-    print(m_name)
-    print(scores)
-    print(np.mean(scores))
-    print('')
+
+    #print(scores)
+    #print(np.mean(scores))
+    #print('')
+    return scores
                 
 def get_tensors(x, y):
     #tensor_x = Variable(torch.Tensor(x))
@@ -186,9 +191,11 @@ def get_tensors(x, y):
     
     return tensor_x, tensor_y, target
 
-def run_training(file_name, model, num_examples, epochs, batch_size):
+def run_training(file_name, model, num_examples, epochs, batch_size, learning_rate = 0.0001,
+                 restart_learning_rate = True,
+                 grow_batch_size = False):
     t0 = time.time()
-    learning_rate = 0.001
+    
     
     m_name = str(model) + ' {} {}'.format(epochs, batch_size)
 
@@ -199,7 +206,6 @@ def run_training(file_name, model, num_examples, epochs, batch_size):
     #optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     
     loss_fn = torch.nn.MultiLabelSoftMarginLoss(reduce=False)
-
     
     loss_results = []
     time_results = []
@@ -209,6 +215,9 @@ def run_training(file_name, model, num_examples, epochs, batch_size):
         return get_tensors(x, y)
 
     for epoch in range(epochs):
+        
+        if restart_learning_rate:
+            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         
         with open(file_name, 'r') as f:
             test_x, test_y, test_target = get_file_tensors(f, True, 400)
@@ -237,7 +246,9 @@ def run_training(file_name, model, num_examples, epochs, batch_size):
                     # is called. Checkout docs of torch.autograd.backward for more details.
                     optimizer.zero_grad()
                     
-                    x, y, target = get_file_tensors(f, True, batch_size)
+                    bs = batch_size * (epoch+1) if grow_batch_size else batch_size
+                    
+                    x, y, target = get_file_tensors(f, True, bs)
                     
                     if len(x) == 0:
                         break
@@ -248,13 +259,23 @@ def run_training(file_name, model, num_examples, epochs, batch_size):
                     # Compute and print loss.
                     loss = loss_fn(y_pred, y)
                     loss = loss * target.type(torch.cuda.FloatTensor)
+                    
                     # Backward pass: compute gradient of the loss with respect to model
                     # parameters
                     loss = loss.sum() / target.type(torch.cuda.FloatTensor).sum()
+                    
+                    #reg_loss = 0
+                    #num = 0.0
+                    #for param in model.parameters():
+                    #    reg_loss += param.pow(2).sum()
+                    #    num += 1
+                        
+                    #loss += l2_lambda * reg_loss / num
+                    
                     loss.backward()
 
                     # Calling the step function on an Optimizer makes an update to its
                     # parameters
                     optimizer.step()
     
-    return (m_name, loss_results, time_results, model)
+    return (m_name, loss_results, time_results)
