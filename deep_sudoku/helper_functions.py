@@ -150,7 +150,7 @@ def try_complete_sudoku(in_file_name, out_file_name, model, limit=10):
                 if np.sum(sln!=p) > 0:
                     out_file.write('{},{}\n'.format(pstring(new_puz), pstring(sln)))
                 
-def eval_and_score_puzzle(model, file_name='test_sudoku.csv'):
+def eval_and_score_puzzle(model, file_name):
     kaggle_puz = []
     kaggle_sln = []
     for i, line in enumerate(open(file_name, 'r').read().splitlines()):
@@ -192,12 +192,12 @@ def get_tensors(x, y):
     return tensor_x, tensor_y, target
 
 def run_training(file_name, model, num_examples, epochs, batch_size, learning_rate = 0.0001,
-                 restart_learning_rate = True,
-                 grow_batch_size = False):
+                 restart_learning_rate = True, use_targets=True, grow_batch_size=False):
     t0 = time.time()
     
     
-    m_name = str(model) + ' {} {}'.format(epochs, batch_size)
+    m_name = str(model) + f' epochs:{epochs} batch_size:{batch_size} ' \
+        + f'use_targets:{use_targets} learning_rate:{learning_rate} grow_batch_size:{grow_batch_size}'
 
     
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -230,10 +230,11 @@ def run_training(file_name, model, num_examples, epochs, batch_size, learning_ra
                     y_pred = model(test_x)
 
                     # Compute and print loss.
-                    loss = loss_fn(y_pred, test_y)
-                    loss = loss * test_target.type(torch.cuda.FloatTensor)
+                    loss = loss_fn(y_pred * test_target.type(torch.cuda.FloatTensor), 
+                                   test_y * test_target.type(torch.cuda.FloatTensor))
+                    #loss = loss * test_target.type(torch.cuda.FloatTensor)
                     #print('test error\t', t, '\t', loss.data[0].tolist())
-                    loss_results.append(loss.sum().data[0].tolist())
+                    loss_results.append(loss.data.sum().tolist())
                     time_results.append(int(time.time() - t0))
 
 
@@ -257,21 +258,17 @@ def run_training(file_name, model, num_examples, epochs, batch_size, learning_ra
                     y_pred = model(x)
 
                     # Compute and print loss.
-                    loss = loss_fn(y_pred, y)
-                    loss = loss * target.type(torch.cuda.FloatTensor)
+                    if use_targets:
+                        loss = loss_fn(y_pred * target.type(torch.cuda.FloatTensor), 
+                                       y * target.type(torch.cuda.FloatTensor))
+                        loss = loss.sum() / target.type(torch.cuda.FloatTensor).sum()
+                    else:
+                        loss = loss_fn(y_pred, y)
+                        loss = loss.sum()
                     
+                  
                     # Backward pass: compute gradient of the loss with respect to model
                     # parameters
-                    loss = loss.sum() / target.type(torch.cuda.FloatTensor).sum()
-                    
-                    #reg_loss = 0
-                    #num = 0.0
-                    #for param in model.parameters():
-                    #    reg_loss += param.pow(2).sum()
-                    #    num += 1
-                        
-                    #loss += l2_lambda * reg_loss / num
-                    
                     loss.backward()
 
                     # Calling the step function on an Optimizer makes an update to its

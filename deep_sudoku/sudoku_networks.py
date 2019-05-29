@@ -29,26 +29,133 @@ class ListModule(torch.nn.Module):
     def __len__(self):
         return len(self._modules)
 
+    
+    def forward(self, x):
+        y = x
+        for m in self:
+            y = m(y)
+        return x 
+    
+    def __str__(self):
+        ret = []
+        for m in self:
+            ret.append(str(m))
+        return 'List' + ' '.join(ret)
+    
+    
+class ResListModule(ListModule): 
+    def forward(self, x):
+        y = None
+        
+        for m in self:
+            if y is None:
+                y = m(x)
+            else:
+                y = y + m(x)
+        
+        return y
+    
+    def __str__(self):
+        ret = []
+        for m in self:
+            ret.append(str(m))
+        return 'ResList' + ' '.join(ret)    
 
-class NetSharedLayer(torch.nn.Module):
-    def __init__(self, hidden_size, dropout_prob, non_linear):
+class ConcatModule(ListModule): 
+    def forward(self, x):
+        y = []
+        
+        for m in self:
+            y.append(m(x))
+            
+        return torch.cat(y, 1)
+    
+    def __str__(self):
+        ret = []
+        for m in self:
+            ret.append(str(m))
+        return 'Concat' + ' '.join(ret)      
+        
+        
+class LocalNeuralNet(torch.nn.Module):
+    def __init__(self, hidden_size, dropout_prob, activation):
         """
         In the constructor we instantiate two nn.Linear modules and assign them as
         member variables.
         """
-        super(NetSharedLayer, self).__init__()
+        super(LocalNeuralNet, self).__init__()
         self.dropout_prob = dropout_prob 
         self.input_size = 729
         self.output_size = 729
-        self.hidden_size = 9*int(hidden_size/9)   
-        self.non_linear = non_linear
+        self.hidden_size = hidden_size  
+        #self.activation = activation
         
         self.ops = []
-        #self.drop = torch.nn.Dropout(p=self.dropout_prob)
-        self.conv = torch.nn.Linear(int(self.input_size / 9), int(self.hidden_size/9))
+        for _ in range(9):
+            self.ops.append(NeuralNet(self.input_size / 9, hidden_size, self.output_size, dropout_prob, activation))
+        self.ops = ListModule(*self.ops)
         
-        if self.non_linear:
-            self.final_layer = torch.nn.Linear(int(self.hidden_size), int(self.output_size))
+        #self.nn = NeuralNet(self.input_size, hidden_size, self.output_size, dropout_prob, activation)
+        
+        # get each 3x3 grid -> 9x9
+        # resnet
+        # 
+        
+    def forward(self, x):
+        """
+        In the forward function we accept a Variable of input data and we must return
+        a Variable of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Variables.
+        """
+        
+        xx = x.reshape(-1, 27,27)
+        x1 = xx[:,::3]
+        x2 = xx[:,1::3]
+        x3 = xx[:,2::3]
+        xx = torch.cat([x1,x2,x3], dim=1).reshape(-1, 729)
+        
+        x_res = None
+        for v in range(9):
+            
+            sub_x = xx.narrow(1, v*81, 81)
+            sub_x = self.ops[v](sub_x)
+            
+            if x_res is None:
+                x_res = sub_x
+            else:
+                x_res += sub_x
+        
+        return x_res
+    
+    def __str__(self):
+        return '{} {} {} {} {}'.format(
+            type(self).__name__, 
+            self.dropout_prob, 
+            self.input_size, 
+            self.hidden_size,
+            self.output_size
+        )  
+
+    
+class NeuralNet(torch.nn.Module):
+    def __init__(self, input_size, hidden_size, output_size, dropout_prob, activation):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(NeuralNet, self).__init__()
+        self.dropout_prob = dropout_prob 
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size  
+        self.activation = activation()
+        
+        
+        #self.drop = torch.nn.Dropout(p=self.dropout_prob)
+        self.hidden = torch.nn.Linear(int(self.input_size), int(self.hidden_size))
+        
+        
+        self.final_layer = torch.nn.Linear(int(self.hidden_size), int(self.output_size))
         
         
         
@@ -59,6 +166,54 @@ class NetSharedLayer(torch.nn.Module):
         well as arbitrary operators on Variables.
         """
         
+        x = self.hidden(x)
+        x = self.activation(x)
+        x = F.dropout(x, p=self.dropout_prob, training=self.training)
+        x = self.final_layer(x)
+        return x
+    
+    def __str__(self):
+        return '{} {} {} {} {} {}'.format(
+            type(self).__name__, 
+            self.dropout_prob, 
+            self.input_size, 
+            self.hidden_size,
+            self.output_size,
+            self.activation
+        )    
+
+class NetSharedLayer(torch.nn.Module):
+    def __init__(self, hidden_size, dropout_prob, rotate):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(NetSharedLayer, self).__init__()
+        self.dropout_prob = dropout_prob 
+        self.input_size = 729
+        self.output_size = 729
+        self.hidden_size = 9*int(hidden_size/9)   
+        
+        self.rotate = rotate
+        
+        self.ops = []
+        #self.drop = torch.nn.Dropout(p=self.dropout_prob)
+        self.conv = torch.nn.Linear(int(self.input_size / 9), int(self.hidden_size/9))
+        
+        self.final_layer = torch.nn.Linear(int(self.hidden_size), int(self.output_size))
+        
+        
+        
+    def forward(self, x):
+        """
+        In the forward function we accept a Variable of input data and we must return
+        a Variable of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Variables.
+        """
+        
+        if self.rotate:
+            x = x.reshape(-1, 9,9,9).transpose(3,2).reshape(-1, 9*9*9)
+        
         #xx = self.drop(x)
    
         deep_arr = []
@@ -67,17 +222,16 @@ class NetSharedLayer(torch.nn.Module):
             conv_x = x.narrow(1, v*81, 81)
             conv_x = self.conv(conv_x)
             
-            if self.non_linear:
-                conv_x = F.leaky_relu(conv_x)
+           
+            conv_x = F.leaky_relu(conv_x)
 
-                conv_x = F.dropout(conv_x, p=self.dropout_prob, training=self.training)
+            conv_x = F.dropout(conv_x, p=self.dropout_prob, training=self.training)
             
             deep_arr.append(conv_x)
             
         deep_x = torch.cat(deep_arr, 1)    
         
-        if self.non_linear:
-            deep_x = self.final_layer(deep_x)
+        deep_x = self.final_layer(deep_x)
                                 
         return deep_x 
     
@@ -88,7 +242,7 @@ class NetSharedLayer(torch.nn.Module):
             self.input_size, 
             self.hidden_size,
             self.output_size,
-            self.non_linear
+            self.rotate
         )
     
 class BigConvNet(torch.nn.Module):
