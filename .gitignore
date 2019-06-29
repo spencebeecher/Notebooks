@@ -1,4 +1,5 @@
 *.mdl
+*.trainer
 *.zip
 *.csv
 *.log

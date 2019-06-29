@@ -7,6 +7,22 @@ import torch.nn.functional as F
 import torch
 import torch.nn 
 
+class SoftmaxModule(torch.nn.Module):
+
+    def __init__(self, model):
+        super(SoftmaxModule, self).__init__()
+        self.model = model
+        
+    def forward(self, x):
+        x = self.model(x)
+        x = F.softmax(x.reshape(-1, 9, 81), dim=0)
+        x = x.reshape(-1, 9*81)
+        return x
+    
+    def __str__(self):
+        
+        return f'SoftmaxModule {str(self.model)}' 
+
 class ListModule(torch.nn.Module):
     def __init__(self, *args):
         super(ListModule, self).__init__()
@@ -34,16 +50,31 @@ class ListModule(torch.nn.Module):
         y = x
         for m in self:
             y = m(y)
-        return x 
+        return y
     
     def __str__(self):
         ret = []
         for m in self:
             ret.append(str(m))
-        return 'List' + ' '.join(ret)
+        return 'List ' + ' '.join(ret)
     
+
+class AvgModel(ListModule): 
+    def forward(self, x):
+        y = []
+        
+        for m in self:
+            y.append(m(x))
+        
+        return torch.mean(torch.stack(y), 0)
     
-class ResListModule(ListModule): 
+    def __str__(self):
+        ret = []
+        for m in self:
+            ret.append(str(m))
+        return 'AvgModel ' + ' '.join(ret)  
+
+class SumModel(ListModule): 
     def forward(self, x):
         y = None
         
@@ -59,7 +90,25 @@ class ResListModule(ListModule):
         ret = []
         for m in self:
             ret.append(str(m))
-        return 'ResList' + ' '.join(ret)    
+        return 'SumModel ' + ' '.join(ret)      
+    
+class ResListModule(ListModule): 
+    def forward(self, x):
+        y = None
+        
+        for m in self:
+            if y is None:
+                y = m(x)
+            else:
+                y = y + m(y)
+        
+        return y
+    
+    def __str__(self):
+        ret = []
+        for m in self:
+            ret.append(str(m))
+        return 'ResList ' + ' '.join(ret)    
 
 class ConcatModule(ListModule): 
     def forward(self, x):
@@ -74,7 +123,7 @@ class ConcatModule(ListModule):
         ret = []
         for m in self:
             ret.append(str(m))
-        return 'Concat' + ' '.join(ret)      
+        return 'Concat ' + ' '.join(ret)      
         
         
 class LocalNeuralNet(torch.nn.Module):
@@ -136,6 +185,37 @@ class LocalNeuralNet(torch.nn.Module):
             self.output_size
         )  
 
+
+class LinearModel(torch.nn.Module):
+    def __init__(self, input_size, output_size):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(LinearModel, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        
+        self.final_layer = torch.nn.Linear(int(self.input_size), int(self.output_size))
+        
+        
+        
+    def forward(self, x):
+        """
+        In the forward function we accept a Variable of input data and we must return
+        a Variable of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Variables.
+        """
+        
+        x = self.final_layer(x)
+        return x
+    
+    def __str__(self):
+        return '{} {} {}'.format(
+            type(self).__name__, 
+            self.input_size, 
+            self.output_size,
+        )        
     
 class NeuralNet(torch.nn.Module):
     def __init__(self, input_size, hidden_size, output_size, dropout_prob, activation):
@@ -225,7 +305,7 @@ class NetSharedLayer(torch.nn.Module):
            
             conv_x = F.leaky_relu(conv_x)
 
-            conv_x = F.dropout(conv_x, p=self.dropout_prob, training=self.training)
+            #conv_x = F.dropout(conv_x, p=self.dropout_prob, training=self.training)
             
             deep_arr.append(conv_x)
             
@@ -245,40 +325,41 @@ class NetSharedLayer(torch.nn.Module):
             self.rotate
         )
     
-class BigConvNet(torch.nn.Module):
-    def __init__(self, num_layers, num_filters, hidden_non_linear, dropout_prob):
+class ConvNet(torch.nn.Module):
+    def __init__(self, num_hidden_layers, conv_block, num_filters, dropout_prob, is_large):
         """
         In the constructor we instantiate two nn.Linear modules and assign them as
         member variables.
         """
-        super(BigConvNet, self).__init__()
+        super(ConvNet, self).__init__()
         
         
-        self.num_layers = num_layers
-        #self.n_hidden = n_hidden
+        self.num_hidden_layers = num_hidden_layers
+        self.is_large = is_large
         self.num_filters = num_filters
         self.output_channels = 9
         self.output_size = (9)**3
         self.dropout_prob = dropout_prob
-        
-        self.hidden_non_linear = hidden_non_linear() if hidden_non_linear else None
+        self.conv_block = conv_block
         
         self.layer_size = self.num_filters * (9)**2
         
         self.ops = []
         #dropbout after relu, batch after linear (conv)
         
-        self.ops.append(torch.nn.Conv2d(9, self.num_filters, kernel_size=(9,9), stride=1, padding=4))
-        self.ops.append(torch.nn.BatchNorm2d(self.num_filters))
-        self.ops.append(hidden_non_linear())
         
-        for i in range(self.num_layers-1):
-            if dropout_prob:
-                self.ops.append(torch.nn.Dropout2d(p=self.dropout_prob))
-            self.ops.append(torch.nn.Conv2d(self.num_filters, self.num_filters, 
-                                         kernel_size=(3,3), stride=1, padding=1))
-            self.ops.append(torch.nn.BatchNorm2d( self.num_filters))
-            self.ops.append(hidden_non_linear())
+        if self.is_large:
+            self.ops.append(
+                torch.nn.Conv2d(9, self.num_filters, kernel_size=(9,9), stride=1, padding=4))
+        else:
+            self.ops.append(
+                torch.nn.Conv2d(9, self.num_filters, kernel_size=(3,3), stride=1, padding=1))
+            
+        self.ops.append(torch.nn.BatchNorm2d(self.num_filters))
+        self.ops.append(torch.nn.LeakyReLU())
+        
+        for i in range(self.num_hidden_layers):
+            self.ops.append(conv_block(self.num_filters, dropout_prob, kernel_size=(3,3)))
             
         self.ops = ListModule(*self.ops)
         
@@ -304,18 +385,191 @@ class BigConvNet(torch.nn.Module):
         
         deep_x = self.combined_linear(deep_x)
         
+        #deep_x = F.softmax(deep_x.reshape(-1, 9, 81), dim=0)
+        #deep_x = deep_x.reshape(-1, 9*81)
+        
         return deep_x
+        
+    
+    def __str__(self):
+        
+        return '{} hidden_layers:{} conv_block:{} num_filters:{} is_large:{} dropout_prob:{}'.format(
+            type(self).__name__, 
+            self.num_hidden_layers, self.conv_block, self.num_filters, self.is_large,
+            self.dropout_prob
+        ) 
+    
+class NewConvNet(torch.nn.Module):
+    def __init__(self, num_hidden_layers, conv_block, num_filters, dropout_prob, is_large):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(NewConvNet, self).__init__()
+        
+        
+        self.num_hidden_layers = num_hidden_layers
+        self.is_large = is_large
+        self.num_filters = num_filters
+        self.output_channels = 9
+        self.output_size = (9)**3
+        self.dropout_prob = dropout_prob
+        self.conv_block = conv_block
+        
+        self.layer_size = self.num_filters * (9)**2
+        
+        self.ops = []
+        #dropbout after relu, batch after linear (conv)
+        
+        
+        if self.is_large:
+            self.ops.append(
+                torch.nn.Conv2d(9, self.num_filters, kernel_size=(9,9), stride=1, padding=4))
+        else:
+            self.ops.append(
+                torch.nn.Conv2d(9, self.num_filters, kernel_size=(3,3), stride=1, padding=1))
+            
+        self.ops.append(torch.nn.BatchNorm2d(self.num_filters))
+        self.ops.append(torch.nn.LeakyReLU())
+        
+        for i in range(self.num_hidden_layers):
+            self.ops.append(conv_block(self.num_filters, dropout_prob, kernel_size=(3,3)))
+        
+        self.ops.append(
+                torch.nn.Conv2d(self.num_filters, 2, kernel_size=(1,1), stride=1, padding=1))
+        self.ops.append(torch.nn.BatchNorm2d(2))
+        self.ops.append(torch.nn.LeakyReLU())
+        
+        self.ops = ListModule(*self.ops)
+        
+        self.combined_linear = torch.nn.Linear(
+                242,  self.output_size)
+        
+        
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Variable of input data and we must return
+        a Variable of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Variables.
+        """
+        
+        deep_x = x.reshape(-1, 9, 9, 9)
+
+        for op in self.ops:
+            deep_x = op(deep_x)
+
+        #import pdb; pdb.set_trace()
+        deep_x = deep_x.reshape(-1, 242)
+            
+        
+        deep_x = self.combined_linear(deep_x)
+        
+        #deep_x = F.softmax(deep_x.reshape(-1, 9, 81), dim=0)
+        #deep_x = deep_x.reshape(-1, 9*81)
+        
+        return deep_x
+        
+    
+    def __str__(self):
+        
+        return '{} hidden_layers:{} conv_block:{} num_filters:{} is_large:{} dropout_prob:{}'.format(
+            type(self).__name__, 
+            self.num_hidden_layers, self.conv_block, self.num_filters, self.is_large,
+            self.dropout_prob
+        )     
+    
+
+
+
+
+    
+class ResidualConvBlock(torch.nn.Module):
+    def __init__(self, num_filters, dropout_prob, kernel_size):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(ResidualConvBlock, self).__init__()
+        
+        
+        self.num_filters = num_filters
+        self.dropout_prob = dropout_prob
+        self.kernel_size = kernel_size
+        
+        
+        self.ops = []
+        #dropout after relu, batch after linear (conv)
+
+
+        if dropout_prob:
+            self.dropout = torch.nn.Dropout2d(p=self.dropout_prob)
+        else:
+            self.dropout = None
+            
+        self.conv1 = torch.nn.Conv2d(self.num_filters, self.num_filters, 
+                                     kernel_size=self.kernel_size, stride=1, padding=1)
+        
+        self.batch1 = torch.nn.BatchNorm2d(self.num_filters)
+        
+        self.conv2 = torch.nn.Conv2d(self.num_filters, self.num_filters, 
+                                     kernel_size=self.kernel_size, stride=1, padding=1)
+        
+        self.batch2 = torch.nn.BatchNorm2d(self.num_filters)
+        
+        self.relu = torch.nn.LeakyReLU()
+            
+        
+        
+        
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Variable of input data and we must return
+        a Variable of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Variables.
+        """
+        
+        if self.dropout:
+            deep_x = self.dropout(x)
+        else:
+            deep_x = x
+        
+        deep_x = self.conv1(deep_x)
+        deep_x = self.batch1(deep_x)
+        deep_x = self.relu(deep_x)
+        deep_x = self.conv2(deep_x)
+        deep_x = self.batch2(deep_x)
+        return self.relu(deep_x + x)
+        
         
     
     def __str__(self):
         return '{} {} {} dropout: {}'.format(
             type(self).__name__, 
-            self.num_layers, self.num_filters,
-            self.hidden_non_linear, 
+            self.num_filters,
             self.dropout_prob
-        )    
+        )        
+    
 
-class ResNet(torch.nn.Module):
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+class legacy_ResNet(torch.nn.Module):
     def __init__(self, first_net, second_net, stack):
         """
         In the constructor we instantiate two nn.Linear modules and assign them as
@@ -362,7 +616,7 @@ class ResNet(torch.nn.Module):
 
 
 
-
+####
 
 
 class SharedConvNet(torch.nn.Module):
@@ -546,7 +800,10 @@ class ComplexNetShared(torch.nn.Module):
             self.output_size,
             self.n_hidden
         )
-class ConvNet(torch.nn.Module):
+    
+    
+    
+class legacyConvNet(torch.nn.Module):
     def __init__(self, num_layers, num_filters, dropout_prob, linear_last):
         """
         In the constructor we instantiate two nn.Linear modules and assign them as
@@ -613,5 +870,5 @@ class ConvNet(torch.nn.Module):
         return '{} {} {} {} {}'.format(
             type(self).__name__, 
             self.dropout_prob, 
-            self.num_layers, self.num_filters, self.linear_last)
+            self.num_layers, self.num_filters, self.linear_last)    
         
