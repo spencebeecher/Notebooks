@@ -78,6 +78,16 @@ def predict_best(puz, model):
     
     return ret
 
+def predict_puzzle_step(puzzle, model):
+    r = matrix_to_one_hot(puzzle)
+    
+    pred = predict_best(r, model)
+        
+    r = pred + r
+        
+    r = one_hot_to_matrix(r)
+    
+    return r
 
 def predict_puzzle(puzzle, model):
     
@@ -241,90 +251,12 @@ def get_file_tensors(f, batch_size):
     x, y = get_x_y(f, batches=batch_size)
     return get_tensors(x, y)
 
-def run_training(file_name, model, num_examples, epochs, batch_size, learning_rate = 0.0001,
-                 restart_learning_rate = True, use_targets=True, grow_batch_size=False,
-                 weight_decay=0.0):
-    t0 = time.time()
-    
-    
-    m_name = str(model) + f' epochs:{epochs} batch_size:{batch_size} ' \
-        + f'use_targets:{use_targets} learning_rate:{learning_rate} grow_batch_size:{grow_batch_size}'
-
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    
-    #learning_rate = 0.5
-    #optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-    
-    loss_fn = torch.nn.MultiLabelSoftMarginLoss(reduce=False)
-    
-    loss_results = []
-    time_results = []
-    
-    
-
-    for epoch in range(epochs):
-        
-        if restart_learning_rate:
-            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        
-        with open(file_name, 'r') as f:
-            test_x, test_y, test_target = get_file_tensors(f, 400)
-
-            for t in range(int(num_examples/batch_size)):
-
-                if t % 500 == 1:
-                    model.eval()
-                    # Forward pass: compute predicted y by passing x to the model.
-                    y_pred = model(test_x)
-
-                    # Compute and print loss.
-                    loss = loss_fn(y_pred * test_target.type(torch.cuda.FloatTensor), 
-                                   test_y * test_target.type(torch.cuda.FloatTensor))
-                    #loss = loss * test_target.type(torch.cuda.FloatTensor)
-                    #print('test error\t', t, '\t', loss.data[0].tolist())
-                    loss_results.append(loss.data.sum().tolist())
-                    time_results.append(int(time.time() - t0))
-
-
-                else:
-                    model.train()
-                    # Before the backward pass, use the optimizer object to zero all of the
-                    # gradients for the variables it will update (which are the learnable
-                    # weights of the model). This is because by default, gradients are
-                    # accumulated in buffers( i.e, not overwritten) whenever .backward()
-                    # is called. Checkout docs of torch.autograd.backward for more details.
-                    optimizer.zero_grad()
-                    
-                    bs = batch_size * (epoch+1) if grow_batch_size else batch_size
-                    
-                    x, y, target = get_file_tensors(f, True, bs)
-                    
-                    if len(x) == 0:
-                        break
-                    
-                    # Forward pass: compute predicted y by passing x to the model.
-                    y_pred = model(x)
-
-                    # Compute and print loss.
-                    if use_targets:
-                        loss = loss_fn(y_pred * target.type(torch.cuda.FloatTensor), 
-                                       y * target.type(torch.cuda.FloatTensor))
-                        loss = loss.sum() / target.type(torch.cuda.FloatTensor).sum()
-                    else:
-                        loss = loss_fn(y_pred, y)
-                        loss = loss.sum()
-                    
-                  
-                    # Backward pass: compute gradient of the loss with respect to model
-                    # parameters
-                    loss.backward()
-
-                    # Calling the step function on an Optimizer makes an update to its
-                    # parameters
-                    optimizer.step()
-    
-    return (m_name, loss_results, time_results)
+def requires_grad(model, requires_grad):
+    for name, child in model.named_children():
+        for param in child.parameters():
+            param.requires_grad = requires_grad
+        requires_grad(child, requires_grad)
+    return model
 
 class FileTrainingData:
     def __init__(self, file_name, offset, batch_size):
@@ -413,6 +345,39 @@ class ZeroTrainingData:
     def __str__(self):
         return f'ZeroTrainingData {str(self.percent_random)} {str(self.training_data)}' 
 
+import random                
+class RandomCompleteTrainingData:
+    def __init__(self, training_data):
+        self.training_data = training_data
+        
+        randoms = []
+
+        for r in range(1000):
+            r = (r+1.0) / 1001
+            randoms.append(np.random.random(729) > r)
+
+        randoms = np.array(randoms[2:-2])
+        
+        np.random.shuffle(randoms)
+        self.randoms = randoms
+        
+     
+    def __iter__(self):
+        
+        for x, y in self.training_data:
+            
+            sel = np.random.choice(len(self.randoms), y.shape[0])
+            sel_r = self.randoms[sel]
+            sel_r = torch.cuda.FloatTensor(sel_r)
+            
+            z = x + (y * sel_r)
+            z = torch.clamp(z, 0, 1)
+            
+            yield z, y         
+
+    def __str__(self):
+        return f'RandomCompleteTrainingData {str(self.training_data)}'     
+    
                 
 class Trainer:
     def __init__(self, model, training_data, test_data, loss_fn, optimizer):
